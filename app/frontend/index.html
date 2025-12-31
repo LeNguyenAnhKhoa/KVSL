@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Luyện tập Ngôn ngữ ký hiệu</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/holistic/holistic.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <style>
+        .status-correct {
+            animation: correct-pulse 1s ease-in-out;
+        }
+        @keyframes correct-pulse {
+            0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(74, 222, 128, 0.7); }
+            50% { transform: scale(1.05); box-shadow: 0 0 10px 20px rgba(74, 222, 128, 0); }
+            100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(74, 222, 128, 0); }
+        }
+    </style>
+</head>
+<body class="bg-gray-900 text-white flex flex-col items-center justify-center min-h-screen font-sans p-4">
+
+    <div id="main-content" class="w-full max-w-7xl grid grid-cols-1 lg:grid-cols-2 gap-8">
+        <div class="flex flex-col items-center bg-gray-800 rounded-2xl shadow-lg p-6 w-full">
+            <h2 class="text-3xl font-bold text-cyan-400 mb-4">Camera của bạn</h2>
+            <div class="relative w-full aspect-video rounded-lg overflow-hidden">
+                <video id="user-video" class="w-full h-full object-cover" playsinline></video>
+                <canvas id="user-canvas" class="absolute top-0 left-0 w-full h-full"></canvas>
+            </div>
+            <div id="current-word-container" class="mt-6 text-center w-full bg-gray-700 p-4 rounded-lg">
+                <p class="text-lg text-gray-300">Từ cần thực hiện:</p>
+                <h3 id="current-word" class="text-5xl font-extrabold text-white tracking-wider">Đang tải...</h3>
+            </div>
+            
+            <div id="countdown-container" class="mt-4 text-center w-full bg-gray-900/50 p-3 rounded-lg border border-yellow-500/30">
+                <p id="countdown-text" class="text-md text-gray-400">Nhấn nút để bắt đầu</p>
+                <div class="h-12 flex items-center justify-center">
+                    <h4 id="countdown-timer" class="text-3xl font-bold text-yellow-300"></h4>
+                </div>
+            </div>
+
+            <div class="mt-4 w-full">
+                 <button id="record-button" class="w-full bg-cyan-600 hover:bg-cyan-500 text-white font-bold py-3 px-6 rounded-lg text-lg transition-transform transform hover:scale-105">
+                    Ghi hình
+                </button>
+            </div>
+
+            <div id="status-box" class="mt-4 w-full h-16 flex items-center justify-center text-2xl font-bold rounded-lg transition-all duration-300">
+                <p id="status-text"></p>
+            </div>
+        </div>
+
+        <div class="flex flex-col items-center bg-gray-800 rounded-2xl shadow-lg p-6 w-full">
+            <h2 class="text-3xl font-bold text-yellow-400 mb-4">Video mẫu</h2>
+            <div class="relative w-full aspect-video rounded-lg overflow-hidden bg-black">
+                <video id="example-video" class="w-full h-full object-cover" loop autoplay muted playsinline></video>
+            </div>
+            <div class="mt-6 text-center w-full bg-gray-700 p-4 rounded-lg">
+                <p class="text-lg text-gray-300">Tiến độ</p>
+                <p id="progress-text" class="text-3xl font-bold">0 / 0</p>
+            </div>
+            <div class="mt-4 w-full">
+                 <button id="skip-button" class="w-full bg-gray-600 hover:bg-gray-500 text-white font-bold py-3 px-6 rounded-lg text-lg transition-transform transform hover:scale-105">
+                    Bỏ qua
+                </button>
+            </div>
+            <div id="top-predictions-container" class="mt-4 w-full bg-gray-700 p-4 rounded-lg hidden">
+                <h4 class="text-xl font-bold text-gray-300 mb-2">Top 3 dự đoán:</h4>
+                <ul id="top-predictions-list" class="space-y-1">
+                </ul>
+            </div>
+        </div>
+    </div>
+    
+    <div id="completion-screen" class="hidden flex-col items-center justify-center text-center">
+        <h1 class="text-6xl font-bold text-green-400">Chúc mừng!</h1>
+        <p class="text-2xl mt-4">Bạn đã hoàn thành tất cả các từ.</p>
+        <button onclick="location.reload()" class="mt-8 bg-cyan-500 hover:bg-cyan-600 text-white font-bold py-3 px-6 rounded-lg text-xl transition-transform transform hover:scale-105">Luyện tập lại</button>
+    </div>
+
+    <script type="module">
+        const userVideo = document.getElementById('user-video');
+        const userCanvas = document.getElementById('user-canvas');
+        const canvasCtx = userCanvas.getContext('2d');
+        const exampleVideo = document.getElementById('example-video');
+        const currentWordEl = document.getElementById('current-word');
+        const statusBox = document.getElementById('status-box');
+        const statusText = document.getElementById('status-text');
+        const progressText = document.getElementById('progress-text');
+        const countdownTimerEl = document.getElementById('countdown-timer');
+        const countdownText = document.getElementById('countdown-text');
+        const skipButton = document.getElementById('skip-button');
+        const recordButton = document.getElementById('record-button');
+        const mainContent = document.getElementById('main-content');
+        const completionScreen = document.getElementById('completion-screen');
+        const topPredictionsContainer = document.getElementById('top-predictions-container');
+        const topPredictionsList = document.getElementById('top-predictions-list');
+
+        const API_URL = "http://localhost:8000";
+        const CONFIDENCE_THRESHOLD = 0.8; 
+        const PREPARE_DURATION = 3000;
+        const RECORD_DURATION = 4000;
+
+        let words = [];
+        let currentWordIndex = -1;
+        let currentTopicId = null;  // Lưu topic_id của từ hiện tại
+        let isRecording = false;
+        let recordedSequence = [];
+        let countdownInterval;
+        let recordingTimeout;
+
+        async function init() {
+            try {
+                const response = await fetch(`${API_URL}/api/words`);
+                words = await response.json();
+                if (words.length > 0) {
+                    setupCamera();
+                    setupMediaPipe();
+                    nextWord();
+                } else {
+                    currentWordEl.textContent = "Lỗi tải từ";
+                }
+            } catch (error) {
+                currentWordEl.textContent = "Không thể kết nối server";
+            }
+        }
+
+        function resetState() {
+            isRecording = false;
+            recordedSequence = [];
+            clearInterval(countdownInterval);
+            clearTimeout(recordingTimeout);
+            // Reset status box về trạng thái ban đầu
+            statusBox.className = "mt-4 w-full h-16 flex items-center justify-center text-2xl font-bold rounded-lg transition-all duration-300";
+            statusText.textContent = "";
+            skipButton.disabled = false;
+            recordButton.disabled = false;
+            countdownText.textContent = "Nhấn nút để bắt đầu";
+            countdownTimerEl.textContent = "";
+            topPredictionsContainer.classList.add('hidden');
+        }
+
+        function nextWord() {
+            resetState();
+            currentWordIndex++;
+            
+            // Kiểm tra xem đã hoàn thành tất cả các từ chưa
+            if (currentWordIndex >= words.length) {
+                showCompletionScreen();
+                return;
+            }
+            
+            // Hiển thị từ mới và lưu topic_id
+            const word = words[currentWordIndex];
+            currentWordEl.textContent = word.label;
+            currentTopicId = word.topic_id;  // Lưu topic_id để gửi khi predict
+            exampleVideo.src = `${API_URL}${word.video_path}`;
+            exampleVideo.play();
+            progressText.textContent = `${currentWordIndex + 1} / ${words.length}`;
+        }
+        
+        skipButton.onclick = () => {
+            statusText.textContent = "Đã bỏ qua";
+            statusBox.classList.add('bg-yellow-600');
+            setTimeout(() => nextWord(), 1000);
+        };
+
+        recordButton.onclick = () => {
+            startPreparationCountdown();
+        };
+
+        function startPreparationCountdown() {
+            recordButton.disabled = true;
+            skipButton.disabled = true;
+            let timeLeft = PREPARE_DURATION / 1000;
+            countdownText.textContent = "Bắt đầu thực hiện trong:";
+            countdownTimerEl.textContent = timeLeft;
+            
+            const prepInterval = setInterval(() => {
+                timeLeft--;
+                countdownTimerEl.textContent = timeLeft;
+                if (timeLeft <= 0) {
+                    clearInterval(prepInterval);
+                    startRecording();
+                }
+            }, 1000);
+        }
+
+        function startRecording() {
+            isRecording = true;
+            recordedSequence = []; 
+            let timeLeft = RECORD_DURATION / 1000;
+            countdownText.textContent = "Đang ghi hình...";
+            countdownTimerEl.textContent = timeLeft;
+
+            countdownInterval = setInterval(() => {
+                timeLeft--;
+                countdownTimerEl.textContent = timeLeft > 0 ? timeLeft : "Đang xử lý...";
+                if (timeLeft <= 0) clearInterval(countdownInterval);
+            }, 1000);
+
+            recordingTimeout = setTimeout(() => {
+                finishRecordingAndPredict();
+            }, RECORD_DURATION);
+        }
+
+        function finishRecordingAndPredict() {
+            if (!isRecording) return;
+            isRecording = false;
+
+            if (recordedSequence.length > 0) {
+                sendPredictionRequest();
+            } else {
+                statusText.textContent = "Không có dữ liệu để gửi";
+                setTimeout(resetState, 2000);
+            }
+        }
+
+        async function sendPredictionRequest() {
+            try {
+                const response = await fetch(`${API_URL}/api/predict-gcn`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        type: "full_sequence",
+                        sequence: recordedSequence,
+                        topic_id: currentTopicId  // Gửi topic_id của từ hiện tại
+                    })
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+
+                const data = await response.json();
+                if (data.prediction_result) {
+                    handlePredictionResult(data);
+                }
+            } catch (error) {
+                console.error('Error sending prediction request:', error);
+                statusText.textContent = "Lỗi khi gửi dữ liệu";
+                statusBox.classList.add('bg-red-500');
+                setTimeout(resetState, 2000);
+            }
+        }
+
+        function showCompletionScreen() {
+            mainContent.classList.add('hidden');
+            completionScreen.classList.remove('hidden');
+            completionScreen.classList.add('flex');
+        }
+        
+        function handlePredictionResult(data) {
+            const predictedLabel = data.prediction_result;
+            const predictedId = data.prediction_id;
+            const confidence = data.confidence;
+            const topPredictions = data.top_predictions || [];
+            const currentWord = words[currentWordIndex];
+            const currentId = currentWord.id;
+
+            // Hiển thị top predictions
+            topPredictionsList.innerHTML = '';
+            if (topPredictions.length > 0) {
+                topPredictions.forEach(pred => {
+                    const li = document.createElement('li');
+                    li.className = 'text-lg text-gray-200 flex justify-between items-center bg-gray-800/50 p-2 rounded';
+                    li.innerHTML = `<span>${pred.id}: ${pred.word}</span> <span class="font-semibold">${(pred.probability * 100).toFixed(1)}%</span>`;
+                    topPredictionsList.appendChild(li);
+                });
+                topPredictionsContainer.classList.remove('hidden');
+            }
+
+            // Reset status box trước khi thêm class mới
+            statusBox.className = "mt-4 w-full h-16 flex items-center justify-center text-2xl font-bold rounded-lg transition-all duration-300";
+            
+            if (predictedId === currentId && confidence > CONFIDENCE_THRESHOLD) {
+                statusText.textContent = `Chính xác! (${(confidence * 100).toFixed(1)}%)`;
+                statusBox.classList.add('bg-green-500', 'text-white', 'status-correct');
+                // Tự động chuyển sang từ tiếp theo sau 2.5 giây
+                setTimeout(() => {
+                    nextWord();
+                }, 2500);
+            } else {
+                statusText.textContent = `Chưa đúng. Dự đoán là: ${predictedLabel} (ID: ${predictedId})`;
+                statusBox.classList.add('bg-red-500', 'text-white');
+                // Reset lại để cho phép thử lại
+                setTimeout(() => {
+                    resetState();
+                    statusText.textContent = "Thử lại nhé!";
+                }, 2500);
+            }
+        }
+
+        function setupCamera() {
+            // Set canvas size to match video
+            userCanvas.width = 1920;
+            userCanvas.height = 1080;
+            
+            const camera = new Camera(userVideo, {
+                onFrame: async () => {
+                    await holistic.send({ image: userVideo });
+                },
+                width: 1280,
+                height: 720
+            });
+            camera.start();
+        }
+
+        function onResults(results) {
+            canvasCtx.save();
+            canvasCtx.clearRect(0, 0, userCanvas.width, userCanvas.height);
+            
+            drawConnectors(canvasCtx, results.poseLandmarks, POSE_CONNECTIONS, { color: '#0ea5e9', lineWidth: 4 });
+            drawLandmarks(canvasCtx, results.poseLandmarks, { color: '#0284c7', lineWidth: 2 });
+            drawConnectors(canvasCtx, results.leftHandLandmarks, HAND_CONNECTIONS, { color: '#facc15', lineWidth: 5 });
+            drawLandmarks(canvasCtx, results.leftHandLandmarks, { color: '#eab308', lineWidth: 2 });
+            drawConnectors(canvasCtx, results.rightHandLandmarks, HAND_CONNECTIONS, { color: '#a3e635', lineWidth: 5 });
+            drawLandmarks(canvasCtx, results.rightHandLandmarks, { color: '#84cc16', lineWidth: 2 });
+            
+            canvasCtx.restore();
+
+            if (isRecording) {
+                // Convert MediaPipe landmarks sang plain objects
+                const convertLandmarks = (landmarks) => {
+                    if (!landmarks) return null;
+                    return landmarks.map(lm => ({
+                        x: lm.x,
+                        y: lm.y,
+                        z: lm.z,
+                        visibility: lm.visibility
+                    }));
+                };
+
+                const keypointsData = {
+                    type: "keypoints",
+                    results: {
+                        poseLandmarks: convertLandmarks(results.poseLandmarks),
+                        // KHÔNG gửi faceLandmarks - không dùng trong model
+                        leftHandLandmarks: convertLandmarks(results.leftHandLandmarks),
+                        rightHandLandmarks: convertLandmarks(results.rightHandLandmarks),
+                    }
+                };
+                recordedSequence.push(keypointsData);
+            }
+        }
+
+        function setupMediaPipe() {
+            window.holistic = new Holistic({
+                locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/holistic/${file}`
+            });
+            holistic.setOptions({
+                modelComplexity: 1,
+                smoothLandmarks: true,
+                enableFaceGeometry: false,  // TẮT face landmarks - không dùng trong model
+                minDetectionConfidence: 0.7,
+                minTrackingConfidence: 0.7
+            });
+            holistic.onResults(onResults);
+        }
+
+        init();
+    </script>
+</body>
+</html>
