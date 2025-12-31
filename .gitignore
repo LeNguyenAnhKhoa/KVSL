@@ -3,3 +3,5 @@ __pycache__/
 *.pyy
 .ipynb_checkpoints
 .vscode/
+*.mp4
+*.pth
